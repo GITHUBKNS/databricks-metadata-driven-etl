@@ -44,7 +44,37 @@ flowchart TD
 | Transactions | 6 | 3 | 2 |
 | Partner transactions | 2 | 2 | 0 |
 
-One $17.00 transaction with an unknown customer remains in the separate orphan quarantine. The two-feed baseline is $170.00. The two partner transactions add $95.00, bringing Gold to $265.00. The [acceptance notebook](notebooks/03_check_results.py) asserts the core table counts, orphan count, partner Silver count when active, and Gold total. Partner Bronze and invalid counts above reflect the seeded fixture.
+One $17.00 transaction with an unknown customer remains in the separate orphan quarantine. The two-feed baseline is $170.00. The two partner transactions add $95.00, bringing Gold to $265.00. The [acceptance notebook](notebooks/03_check_results.py) asserts the core table counts, orphan count, partner Silver count when active, and Gold total. The partner ingestion output confirms 2 Bronze rows and 0 quarantined rows.
+
+## Execution screenshots
+
+### Initial customer and transaction configuration
+
+![Initial customer and transaction configuration](docs/screenshots/01_metadata_config.png)
+
+### Customer ingestion — 5 Bronze, 3 Silver, 1 quarantined
+
+![Customer ingestion — 5 Bronze, 3 Silver, 1 quarantined](docs/screenshots/02_customer_ingestion.png)
+
+### Transaction ingestion — 6 Bronze, 3 Silver, 2 quarantined
+
+![Transaction ingestion — 6 Bronze, 3 Silver, 2 quarantined](docs/screenshots/03_transaction_ingestion.png)
+
+### Partner ingestion — 2 Bronze, 2 Silver, 0 quarantined
+
+![Partner ingestion — 2 Bronze, 2 Silver, 0 quarantined](docs/screenshots/04_partner_ingestion.png)
+
+### Gold summary — East $155.00 and West $110.00
+
+![Gold summary — East $155.00 and West $110.00](docs/screenshots/05_gold_summary.png)
+
+### Successful workflow with three source iterations
+
+![Successful workflow with three source iterations](docs/screenshots/06_workflow_success.png)
+
+### Passing acceptance checks — $265.00 Gold total
+
+![Passing acceptance checks — $265.00 Gold total](docs/screenshots/07_validation_passed.png)
 
 ## Reproduce the run
 
