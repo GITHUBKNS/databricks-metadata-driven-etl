@@ -1,113 +1,66 @@
-# Metadata-Driven Data Engineering Framework (Databricks + PySpark + Delta Lake)
+# Databricks Metadata-Driven ETL
 
-**Status:** Starter project. Run and test in your own Databricks workspace before describing it as completed.
+A PySpark and Delta Lake pipeline that ingests synthetic customer and transaction feeds, quarantines invalid records, and publishes transaction totals by customer region. A Delta control table drives ingestion. The partner feed was added through configuration and reused the existing processor.
 
-A small, reproducible portfolio demonstration of **configuration-driven ingestion**, source-specific validation, **Auto Loader**, Delta Lake Bronze/Silver/Gold tables, data quality quarantine, and Databricks Job orchestration. Uses entirely **synthetic customer and transaction records**.
+## Validated run
+
+| Metric | Result |
+| --- | ---: |
+| Data sources integrated | 3 |
+| Raw records processed | 13 |
+| Observed workflow runtime | 2m 12s |
+| Validated Gold total | $265.00 |
+
+Runtime is from one Databricks run on this synthetic dataset. See the [execution evidence index](docs/screenshots/README.md).
 
 ## Architecture
 
-See [architecture diagram](docs/architecture.md).
-
-```text
-Synthetic CSV / JSON files -> Unity Catalog volume -> Auto Loader
-                               (metadata selects sources, targets and rules)
-                              -> Bronze Delta tables
-                              -> Silver + invalid-row quarantine
-                              -> Gold transaction totals by region
-                              -> Databricks SQL inspection & acceptance checks
+```mermaid
+flowchart TD
+    M[(Delta metadata)] --> J[SQL lookup and For each]
+    J --> A[Auto Loader and PySpark]
+    L[(Unity Catalog landing volume)] --> A
+    A --> B[(Bronze Delta)]
+    B --> V[Validate and deduplicate]
+    V --> S[(Silver Delta)]
+    V --> Q[(Invalid row quarantine)]
+    S --> G[Join and aggregate by region]
+    G --> R[(Gold Delta)]
+    G --> O[(Orphan transaction quarantine)]
+    R --> C[Acceptance checks]
 ```
 
-## Before you start
+[Architecture notes](docs/architecture.md)
 
-1. Sign up for [Databricks Free Edition](https://docs.databricks.com/aws/en/getting-started/free-edition) or use an existing Databricks workspace.
-2. Find a **Unity Catalog-enabled catalog** where you can `CREATE SCHEMA`, `CREATE VOLUME` and `CREATE TABLE`. On Free Edition, use the workspace's available catalog, which might not be `main`. Run `SHOW CATALOGS` in the SQL editor.
-3. Import the `.py` files from `notebooks/` as Databricks notebooks (or open this repo as a Databricks Git folder if your workspace supports it). Attach the available serverless compute.
-4. In each notebook, set the widget `catalog` to your chosen catalog; leaving it blank uses `current_catalog()`.
-5. Keep this project separate from company code and data. All provided sample records are fictional.
+## Implementation and data quality
 
-## Run: basic version
+- **Ingestion.** Each active `pipeline_config` row selects the file format, landing path, Bronze and Silver tables, and validation rule set. Auto Loader uses an independent schema location and checkpoint per feed and an available-now trigger to process available files. Bronze records retain the source path and ingestion timestamp.
+- **Validation.** Silver snapshots apply customer or transaction rules and deduplicate valid records by key. Invalid records retain an error reason. The Gold job joins valid transactions to customers and isolates unmatched customer references before aggregating.
+- **Extensibility.** The partner JSON feed uses its own metadata row and targets while reusing the transaction rules.
 
-**Step 1:** Run `notebooks/00_setup.py` once. It creates:
-- `<catalog>.md_framework.pipeline_config`
-- Unity Catalog managed volumes `landing` and `state`
-- Two synthetic incoming files containing valid, duplicate and invalid rows
+| Feed | Raw Bronze | Valid Silver after deduplication | Invalid row quarantine |
+| --- | ---: | ---: | ---: |
+| Customers | 5 | 3 | 1 |
+| Transactions | 6 | 3 | 2 |
+| Partner transactions | 2 | 2 | 0 |
 
-**Step 2:** Run `notebooks/01_process_source.py` twice, with the widget `pipeline_id` set to `customers` and then `transactions`. This single notebook reads source/target/format/rule settings from `pipeline_config`.
+One $17.00 transaction with an unknown customer remains in the separate orphan quarantine. The two-feed baseline is $170.00. The two partner transactions add $95.00, bringing Gold to $265.00. The [acceptance notebook](notebooks/03_check_results.py) asserts the core table counts, orphan count, partner Silver count when active, and Gold total. Partner Bronze and invalid counts above reflect the seeded fixture.
 
-**Step 3:** Run `notebooks/02_build_gold.py`. The Gold table groups valid joined transactions by customer region. Orphan customer references are written to their own quarantine table.
+## Reproduce the run
 
-**Step 4:** Run `notebooks/03_check_results.py`. It checks expected Bronze, Silver, quarantine, and Gold totals. Initial synthetic Gold total is **170.00**, and an orphan transaction worth **17.00** is separately quarantined. No arbitrary performance numbers are claimed.
+1. Open the repository in a Databricks Git folder or import the Python source files from [`notebooks/`](notebooks/) as notebooks. Use compute with Unity Catalog and Auto Loader support, and a writable catalog with permissions to create the demo schema, volumes, and tables. Use the same `catalog` parameter throughout.
+2. Run [`00_setup.py`](notebooks/00_setup.py) to create the control table, landing and state volumes, and the customer CSV and transaction JSON fixtures.
+3. Run [`04_add_partner_source.py`](notebooks/04_add_partner_source.py) to seed and register the partner JSON feed. For a two-feed baseline, defer this step until after the first validation.
+4. Replace `YOUR_CATALOG` in [`read_active_pipelines.sql`](sql/read_active_pipelines.sql) and save it as a Databricks SQL query. Create a job with a SQL query task named `read_active_pipelines` using that query and a SQL warehouse.
+5. Add a dependent **For each** task. Set Inputs to `{{tasks.read_active_pipelines.output.rows}}` and point its nested notebook task to [`01_process_source.py`](notebooks/01_process_source.py). Pass `pipeline_id={{input.pipeline_id}}` and your `catalog`. Alternatively, run the processor manually once for each active source: `customers`, `transactions`, and `partner_transactions`.
+6. Run [`02_build_gold.py`](notebooks/02_build_gold.py) after all ingestion iterations, then run [`03_check_results.py`](notebooks/03_check_results.py). Add both as ordered dependent notebook tasks to run the full workflow in one job.
+7. Set the same catalog in [`inspect_results.sql`](sql/inspect_results.sql) to inspect metadata, Gold totals, and quarantine tables.
 
-## Show metadata-driven job orchestration
+## Design trade-offs
 
-1. Edit `sql/read_active_pipelines.sql` to use the same catalog used in setup. Save the SELECT as a Databricks SQL query called `read_active_pipelines`.
-2. Go to **Jobs & Pipelines** (sometimes shown as **Workflows**) and create a new Job.
-3. Add a **SQL query** task named `read_active_pipelines` using your saved query and a SQL warehouse.
-4. Add a **For each** task depending on the SQL lookup. Set **Inputs** to:
+- Bronze ingestion tracks files incrementally. Rebuilding Silver and Gold as snapshots keeps the small fixture easy to reconcile. Larger tables would benefit from incremental Delta merges and explicit backfill handling.
+- Transaction IDs are assumed unique across feeds and seeded duplicates are identical. Conflicting records would need a deterministic winner and a cross-source key policy.
+- Metadata can onboard feeds using an existing rule set. A new schema requires explicit validation rules.
+- The reported run uses synthetic data. Production use would require schema contracts, audit metrics, alerts, and deployment automation.
 
-   ```text
-   {{tasks.read_active_pipelines.output.rows}}
-   ```
-
-5. For the nested task, choose a **Notebook** and point it to `notebooks/01_process_source.py`. Set parameters:
-
-   ```text
-   pipeline_id = {{input.pipeline_id}}
-   catalog = YOUR_CATALOG
-   ```
-
-6. Choose concurrency `2`, suitable for the two independent demo pipelines. Run the Job and inspect the task iterations. If you want a complete scheduled flow, make `02_build_gold` a downstream notebook task and `03_check_results` a final downstream task.
-
-Official Databricks workflow tutorial: https://docs.databricks.com/aws/en/jobs/how-to/foreach-sql-lookup-tutorial
-
-## Demonstrate a third source without editing the processor
-
-1. Run `notebooks/04_add_partner_source.py`. It adds a new synthetic JSON feed and metadata row for **partner_transactions**. It reuses the existing `transactions` validation rule set.
-2. Run `01_process_source.py` with `pipeline_id=partner_transactions` **or** rerun the metadata-driven Job. The processor code is unchanged.
-3. Rerun `02_build_gold.py` and `03_check_results.py`. The new total should be **265.00** (170.00 + 35.00 + 60.00).
-4. Capture a screenshot of the third control-table row, its successful Job iteration, and the updated Gold table. This is the strongest proof that configuration controls the pipeline.
-
-## What to show in GitHub
-
-- This `README.md` and architecture diagram
-- Notebook source code and SQL
-- Screenshots **from your own runs** in `docs/screenshots/` (add only after execution)
-- A table of observed validation counts and records in `docs/results.md` (create once tested)
-- A short explanation of design tradeoffs and future improvements
-
-Do **not** commit access tokens, private customer files, workspace secrets, real account identifiers, or raw production exports.
-
-## GitHub publication
-
-After testing, create a public repo named `databricks-metadata-driven-etl`, then from the extracted folder:
-
-```bash
-git init
-git add .
-git commit -m "Build metadata-driven Databricks ETL demo"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/databricks-metadata-driven-etl.git
-git push -u origin main
-```
-
-Create the empty GitHub repository without initializing a README to avoid an unnecessary merge. You will authenticate using the supported GitHub sign-in or credential method.
-
-## Production improvements worth discussing in interviews
-
-- Move Silver and Gold from snapshot `overwrite` to incremental `MERGE` and backfill-aware processing.
-- Add source update timestamps and deterministic deduplication for conflicting records.
-- Add rule metadata versions, schema contracts, tests, and reporting SLA definitions.
-- Track per-run metrics in an audit Delta table and alert on policy failures.
-- Use least-privilege permissions on the configuration, storage volumes, and target tables.
-- Use deployment bundles and CI automation once the notebook version is working.
-
-## Official references
-
-- [Databricks Free Edition and limits](https://docs.databricks.com/aws/en/getting-started/free-edition)
-- [Databricks Auto Loader](https://docs.databricks.com/aws/en/ingestion/cloud-object-storage/auto-loader/)
-- [Unity Catalog volumes](https://docs.databricks.com/aws/en/volumes/)
-- [Metadata-driven For each Jobs](https://docs.databricks.com/aws/en/jobs/how-to/foreach-sql-lookup-tutorial)
-
-## Project attribution
-
-A self-directed portfolio learning project based on the generic architecture pattern discussed in a public data-engineering Reel and official Databricks documentation. It is not an employer project or a production deployment.
+[MIT License](LICENSE)
