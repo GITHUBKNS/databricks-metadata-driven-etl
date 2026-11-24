@@ -13,6 +13,10 @@ A PySpark and Delta Lake pipeline that ingests synthetic customer and transactio
 
 Runtime is from one Databricks run on this synthetic dataset. See the [execution evidence index](docs/screenshots/README.md).
 
+## Successful workflow with three source iterations
+
+![Successful workflow with three source iterations](docs/screenshots/06_workflow_success.png)
+
 ## Architecture
 
 ```mermaid
@@ -67,10 +71,6 @@ One $17.00 transaction with an unknown customer remains in the separate orphan q
 ### Gold summary — East $155.00 and West $110.00
 
 ![Gold summary — East $155.00 and West $110.00](docs/screenshots/05_gold_summary.png)
-
-### Successful workflow with three source iterations
-
-![Successful workflow with three source iterations](docs/screenshots/06_workflow_success.png)
 
 ### Passing acceptance checks — $265.00 Gold total
 
